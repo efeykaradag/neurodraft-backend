@@ -6,9 +6,6 @@ from app.models import File as FileModel, Folder, File, Note
 from app.auth.routes import get_current_user
 from app.utils.compression import compress_image, zip_any_file, get_mime_type
 from uuid import uuid4
-import zipfile
-import tempfile
-from fastapi.responses import FileResponse
 from app.utils.extractors import extract_text_auto
 
 router = APIRouter()
