@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 import os, random, string
 from dotenv import load_dotenv
+from app.utils.email import send_email
 
 from app.schemas import LoginRequest
 
@@ -57,9 +58,39 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
     email_code = EmailCode(code=code, code_type="register", expiry=expiry, user_id=user.id)
     db.add(email_code)
     db.commit()
-    print(f"MAIL: {data.email} için kayıt kodu: {code}")
-    return {"msg": "Onay kodu e-mail adresine gönderildi!"}
 
+    # --- Burada mail gönder ---
+    subject = "NeuroDrafts Kaydını Onayla 🚀"
+    html = f"""
+        <div style="max-width:440px;margin:auto;padding:24px;background:#fff;
+                    border-radius:12px;font-family:sans-serif;color:#222;
+                    border:1px solid #e4e8f0;box-shadow:0 4px 32px #0001;">
+            <div style="text-align:center;margin-bottom:18px;">
+                <img src="https://neurodrafts.com/logo.png" alt="NeuroDrafts" width="54" style="margin-bottom:12px;"/>
+                <h2 style="margin:0;font-size:1.5rem;color:#4b40c5;">Hoşgeldin!</h2>
+            </div>
+            <div style="font-size:1.12rem;margin-bottom:18px;">
+                NeuroDrafts hesabını oluşturmak üzeresin.<br>
+                Kaydını tamamlamak için aşağıdaki <b>onay kodunu</b> kullanabilirsin:
+            </div>
+            <div style="font-size:2rem;font-weight:700;background:#f5f8ff;border-radius:8px;padding:14px 0;text-align:center;letter-spacing:6px;color:#4b40c5;">
+                {code}
+            </div>
+            <div style="font-size:0.95rem;color:#555;margin:24px 0 8px;">
+                Kodun <b>10 dakika</b> boyunca geçerlidir. Kodun süresi dolarsa yeni bir kod alabilirsin.<br>
+                <br>
+                Eğer bu işlemi <b>sen başlatmadıysan</b> bu maili görmezden gel.
+            </div>
+            <hr style="margin:24px 0 8px;">
+            <div style="font-size:0.87rem;color:#777;text-align:center;">
+                NeuroDrafts ekibi <br>
+                <a href="https://neurodrafts.com" style="color:#06B6D4;text-decoration:none;">neurodrafts.com</a>
+            </div>
+        </div>
+        """
+
+    send_email(data.email, subject, html)
+    return {"msg": "Onay kodu e-mail adresine gönderildi!"}
 
 ### --------- Kullanıcı (me) ---------
 def get_current_user(request: Request, db: Session = Depends(get_db)):
@@ -149,3 +180,80 @@ def logout(response: Response):
     response.delete_cookie(key="access_token", path="/")
     response.delete_cookie(key="refresh_token", path="/")
     return {"msg": "Çıkış yapıldı"}
+
+@router.post("/resend-verify-code")
+def resend_verify_code(data: dict, db: Session = Depends(get_db)):
+    email = data.get("email")
+    user = db.query(User).filter_by(email=email).first()
+    if not user:
+        raise HTTPException(404, "Kullanıcı bulunamadı!")
+
+    if user.is_active:
+        raise HTTPException(400, "Kullanıcı zaten aktif!")
+
+    # Yeni kod oluştur
+    code = ''.join(random.choices(string.digits, k=6))
+    expiry = datetime.utcnow() + timedelta(minutes=10)
+
+    # Eski kodları sil (isteğe bağlı)
+    db.query(EmailCode).filter_by(user_id=user.id, code_type="register").delete()
+
+    email_code = EmailCode(code=code, code_type="register", expiry=expiry, user_id=user.id)
+    db.add(email_code)
+    db.commit()
+
+    # Mail gönder
+    subject = "NeuroDrafts Kaydını Onayla 🚀"
+    html = f"""
+            <div style="max-width:440px;margin:auto;padding:24px;background:#fff;
+                        border-radius:12px;font-family:sans-serif;color:#222;
+                        border:1px solid #e4e8f0;box-shadow:0 4px 32px #0001;">
+                <div style="text-align:center;margin-bottom:18px;">
+                    <img src="https://neurodrafts.com/logo.png" alt="NeuroDrafts" width="54" style="margin-bottom:12px;"/>
+                    <h2 style="margin:0;font-size:1.5rem;color:#4b40c5;">Hoşgeldin!</h2>
+                </div>
+                <div style="font-size:1.12rem;margin-bottom:18px;">
+                    NeuroDrafts hesabını oluşturmak üzeresin.<br>
+                    Kaydını tamamlamak için aşağıdaki <b>onay kodunu</b> kullanabilirsin:
+                </div>
+                <div style="font-size:2rem;font-weight:700;background:#f5f8ff;border-radius:8px;padding:14px 0;text-align:center;letter-spacing:6px;color:#4b40c5;">
+                    {code}
+                </div>
+                <div style="font-size:0.95rem;color:#555;margin:24px 0 8px;">
+                    Kodun <b>10 dakika</b> boyunca geçerlidir. Kodun süresi dolarsa yeni bir kod alabilirsin.<br>
+                    <br>
+                    Eğer bu işlemi <b>sen başlatmadıysan</b> bu maili görmezden gel.
+                </div>
+                <hr style="margin:24px 0 8px;">
+                <div style="font-size:0.87rem;color:#777;text-align:center;">
+                    NeuroDrafts ekibi <br>
+                    <a href="https://neurodrafts.com" style="color:#06B6D4;text-decoration:none;">neurodrafts.com</a>
+                </div>
+            </div>
+            """
+
+    send_email(email, subject, html)
+    return {"msg": "Yeni doğrulama kodu e-posta adresine gönderildi."}
+
+@router.post("/verify-email")
+def verify_email(data: dict, db: Session = Depends(get_db)):
+    email = data.get("email")
+    code = data.get("code")
+    user = db.query(User).filter_by(email=email).first()
+    if not user:
+        raise HTTPException(404, "Kullanıcı bulunamadı!")
+
+    # Son kodu çek
+    code_obj = db.query(EmailCode).filter_by(user_id=user.id, code_type="register", code=code).first()
+    if not code_obj or code_obj.expiry < datetime.utcnow():
+        raise HTTPException(400, "Kod hatalı veya süresi geçti!")
+
+    # Kullanıcıyı aktifleştir
+    user.is_active = True
+    db.commit()
+
+    # Kodu sil (güvenlik için)
+    db.delete(code_obj)
+    db.commit()
+
+    return {"msg": "Hesap başarıyla doğrulandı."}
