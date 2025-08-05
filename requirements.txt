@@ -20,3 +20,4 @@ pdfplumber~=0.11.7
 pytesseract~=0.3.13
 openai-whisper
 PyPDF2~=3.0.1
+psycopg2-binary>=2.9.0
