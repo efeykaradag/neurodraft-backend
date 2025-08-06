@@ -23,10 +23,19 @@ app.include_router(notes.router)
 app.include_router(ai_router)
 app.include_router(routes.router)
 
+origins = [
+    "https://www.neurodrafts.com",     # Prod domainin
+    "http://localhost:3000",           # Lokal geliştirmen için
+    "https://neurodrafts.com",
+    "https://neurodraft-frontend-git-main-efeykaradags-projects.vercel.app/",
+    "neurodraft-frontend.vercel.app",
+    "https://neurodraft-frontend-efeykaradags-projects.vercel.app/"
+
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://neurodrafts.com", "https://www.neurodrafts.com", "https://neurodraft-frontend.vercel.app/"],  # veya ["*"] test için
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
