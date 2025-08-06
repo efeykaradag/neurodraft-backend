@@ -26,7 +26,7 @@ app.include_router(routes.router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Production’da domainini gir!
+    allow_origins=["https://neurodrafts.com", "https://www.neurodrafts.com", "https://neurodraft-frontend.vercel.app/"],  # veya ["*"] test için
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
