@@ -1,24 +1,58 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
-from app.models import Note, Folder
+from app.models import Note, Folder, DemoSession
 from app.database import get_db
-from app.auth.routes import get_current_user
+from app.auth.routes import get_current_user_optional, get_current_user
 from app.schemas import NoteCreate
 import shutil
 
 router = APIRouter()
 
 # NOT EKLE
+from fastapi import Request
+
 @router.post("/folders/{folder_id}/notes")
-def add_note(folder_id: int, note: NoteCreate, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    folder = db.query(Folder).filter(Folder.id == folder_id, Folder.user_id == user.id).first()
-    if not folder and user.role != "admin":
-        raise HTTPException(404, "Klasör bulunamadı veya yetkiniz yok.")
-    new_note = Note(title=note.title, content=note.content, folder_id=folder_id)
+def add_note(
+    folder_id: int,
+    note: NoteCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_optional),  # yeni: zorunlu olmayan user dependency!
+):
+    # 1. DEMO MU? USER MI?
+    demo_session = None
+    if not user:  # Eğer girişli user yoksa demo olarak davran
+        ip = request.client.host
+        demo_session = db.query(DemoSession).filter_by(ip_address=ip).first()
+        if not demo_session or demo_session.expires_at < datetime.utcnow():
+            raise HTTPException(403, "Demo süresi dolmuş veya aktif demo yok.")
+        folder = db.query(Folder).filter(Folder.id == folder_id, Folder.demo_session_id == demo_session.id).first()
+        if not folder:
+            raise HTTPException(404, "Demo için klasör bulunamadı!")
+        new_note = Note(
+            title=note.title,
+            content=note.content,
+            folder_id=folder_id,
+            demo_session_id=demo_session.id
+        )
+    else:  # Normal kullanıcı
+        folder = db.query(Folder).filter(Folder.id == folder_id, Folder.user_id == user.id).first()
+        if not folder and user.role != "admin":
+            raise HTTPException(404, "Klasör bulunamadı veya yetkiniz yok.")
+        new_note = Note(
+            title=note.title,
+            content=note.content,
+            folder_id=folder_id,
+            user_id=user.id
+        )
+
     db.add(new_note)
     db.commit()
     db.refresh(new_note)
     return new_note
+
 
 @router.post("/folders/{folder_id}/files")
 def upload_file(folder_id: int, upload_file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -37,11 +71,36 @@ def upload_file(folder_id: int, upload_file: UploadFile = File(...), db: Session
 
 # NOTLARI GETİR
 @router.get("/folders/{folder_id}/notes")
-def get_notes(folder_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    folder = db.query(Folder).filter(Folder.id == folder_id).first()
-    if not folder or (folder.user_id != user.id and user.role != "admin"):
-        raise HTTPException(403, "Yetkiniz yok.")
-    return db.query(Note).filter(Note.folder_id == folder_id).all()
+def get_notes(
+    folder_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_optional)
+):
+    if not user:
+        # DEMO AKIŞI
+        ip = request.client.host
+        demo_session = db.query(DemoSession).filter_by(ip_address=ip).first()
+        if not demo_session or demo_session.expires_at < datetime.utcnow():
+            raise HTTPException(403, "Demo süresi dolmuş veya aktif demo yok.")
+        folder = db.query(Folder).filter(
+            Folder.id == folder_id, Folder.demo_session_id == demo_session.id
+        ).first()
+        if not folder:
+            raise HTTPException(404, "Demo için klasör bulunamadı!")
+        notes = db.query(Note).filter(
+            Note.folder_id == folder_id, Note.demo_session_id == demo_session.id
+        ).all()
+        return notes
+    else:
+        # GERÇEK USER AKIŞI
+        folder = db.query(Folder).filter(Folder.id == folder_id).first()
+        if not folder or (folder.user_id != user.id and user.role != "admin"):
+            raise HTTPException(403, "Yetkiniz yok.")
+        notes = db.query(Note).filter(
+            Note.folder_id == folder_id, Note.user_id == user.id
+        ).all()
+        return notes
 
 # NOTU SİL
 @router.delete("/notes/{note_id}")

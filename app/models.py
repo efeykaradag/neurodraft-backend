@@ -12,9 +12,27 @@ class User(Base):
     full_name = Column(String, nullable=True)  # İsteğe bağlı ekledim
     is_active = Column(Boolean, default=False)
     role = Column(String, default="user")
+    is_waitlist = Column(Boolean, default=True)  # <--- Bunu ekle!
+    terms_accepted = Column(Boolean, default=False, nullable=False)
+    terms_accepted_at = Column(DateTime, default=datetime.utcnow, nullable=True)
+
 
     folders = relationship("Folder", back_populates="user")
     email_codes = relationship("EmailCode", back_populates="user")  # Onay/sıfırlama kodları için
+
+class DemoSession(Base):
+    __tablename__ = "demo_sessions"
+    id = Column(Integer, primary_key=True)
+    ip_address = Column(String, index=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime)
+
+class DemoBan(Base):
+    __tablename__ = "demo_bans"
+    id = Column(Integer, primary_key=True)
+    ip_address = Column(String, index=True, unique=True)
+    banned_until = Column(DateTime)
+
 
 class EmailCode(Base):
     __tablename__ = "email_codes"
@@ -33,7 +51,7 @@ class Folder(Base):
     user = relationship("User", back_populates="folders")
     notes = relationship("Note", back_populates="folder")
     files = relationship("File", back_populates="folder")
-
+    demo_session_id = Column(Integer, ForeignKey('demo_sessions.id'), nullable=True)
 
 class Note(Base):
     __tablename__ = "notes"
@@ -43,7 +61,7 @@ class Note(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     folder_id = Column(Integer, ForeignKey("folders.id"))
     folder = relationship("Folder", back_populates="notes")
-
+    demo_session_id = Column(Integer, ForeignKey('demo_sessions.id'), nullable=True)
 
 class File(Base):
     __tablename__ = "files"
@@ -57,3 +75,4 @@ class File(Base):
     extracted_text = Column(String, nullable=False)
     folder = relationship("Folder", back_populates="files")
     user = relationship("User")
+    demo_session_id = Column(Integer, ForeignKey('demo_sessions.id'), nullable=True)

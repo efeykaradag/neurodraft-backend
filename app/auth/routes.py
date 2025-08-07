@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from app.models import User, EmailCode
+from app.models import User, EmailCode, DemoSession
 from app.database import get_db
 from passlib.context import CryptContext
 from jose import jwt, JWTError
@@ -9,8 +9,8 @@ from pydantic import BaseModel, EmailStr
 import os, random, string
 from dotenv import load_dotenv
 from app.utils.email import send_email
-
 from app.schemas import LoginRequest
+from typing import Optional
 
 load_dotenv()
 def is_prod(): return os.getenv("ENV") == "prod"
@@ -31,6 +31,8 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     full_name: str
     password: str
+    termsAccepted: bool
+    termsAcceptedAt: Optional[datetime]
 
 class VerifyEmailRequest(BaseModel):
     email: EmailStr
@@ -53,7 +55,15 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(User).filter_by(email=data.email).first():
         raise HTTPException(400, "Bu mail adresiyle kayıt zaten var!")
     hashed_pw = pwd_context.hash(data.password)
-    user = User(email=data.email, hashed_password=hashed_pw, full_name=data.full_name, is_active=False, role="user")
+    user = User(
+        email=data.email,
+        hashed_password=hashed_pw,
+        full_name=data.full_name,
+        is_active=False,
+        role="user",
+        terms_accepted=data.termsAccepted,
+        terms_accepted_at=datetime.utcnow(),
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -108,9 +118,55 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
     except JWTError:
         raise HTTPException(401, "Token geçersiz veya süresi dolmuş.")
 
+def get_current_user_optional(request: Request, db: Session = Depends(get_db)):
+    token = request.cookies.get("access_token")
+    if not token:
+        return None  # Girişli user yoksa None dön
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        if not email:
+            return None
+        user = db.query(User).filter(User.email == email).first()
+        return user
+    except JWTError:
+        return None
+
 @router.get("/me")
-def me(user=Depends(get_current_user)):
-    return {"email": user.email, "role": user.role, "name": user.full_name}
+def me(request: Request, db: Session = Depends(get_db)):
+    # 1. Önce kayıtlı kullanıcı kontrolü
+    token = request.cookies.get("access_token")
+    if token:
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            email = payload.get("sub")
+            if email:
+                user = db.query(User).filter(User.email == email).first()
+                if user:
+                    return {
+                        "mode": "user",
+                        "email": user.email,
+                        "role": user.role,
+                        "name": user.full_name,
+                    }
+        except Exception:
+            pass  # Token geçersizse demo'ya geç
+
+    # 2. Demo kullanıcı kontrolü (IP tabanlı)
+    ip = request.headers.get("x-forwarded-for", request.client.host)
+    session = db.query(DemoSession).filter(
+        DemoSession.ip_address == ip,
+        DemoSession.expires_at > datetime.utcnow()
+    ).first()
+    if session:
+        return {
+            "mode": "demo",
+            "ip": ip,
+            "expires_at": session.expires_at,
+        }
+
+    # 3. Hiçbiri yoksa
+    raise HTTPException(401, "Giriş yapmadınız veya demo süreniz bitti.")
 
 ### --------- Ekstra Auth Fonksiyonları ---------
 def verify_password(plain_password, hashed_password):
@@ -146,6 +202,8 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
         raise HTTPException(401, "Kullanıcı veya şifre hatalı.")
     if not user.is_active:
         raise HTTPException(401, "Email onayı yapılmamış.")
+    if user.is_waitlist:
+        raise HTTPException(403, "Henüz sıradasınız! Tam sürüm açıldığında ilk sizinle iletişime geçeceğiz.")
 
     access_token = create_access_token({"sub": user.email, "role": user.role})
     refresh_token = create_refresh_token({"sub": user.email})

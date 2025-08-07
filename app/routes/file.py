@@ -1,9 +1,11 @@
 import os
+from datetime import datetime
+
 from fastapi import APIRouter, UploadFile, File as FastAPIFile, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import File as FileModel, Folder, File, Note
-from app.auth.routes import get_current_user
+from app.models import File as FileModel, Folder, File, Note, DemoSession
+from app.auth.routes import get_current_user, get_current_user_optional
 from app.utils.compression import compress_image, zip_any_file, get_mime_type
 from uuid import uuid4
 from app.utils.extractors import extract_text_auto
@@ -93,14 +95,36 @@ async def upload_file(
     }
 
 
+from fastapi import Request
+
 @router.get("/folders/{folder_id}/files")
 async def list_files(
     folder_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    user=Depends(get_current_user),
+    user=Depends(get_current_user_optional),
 ):
-    files = db.query(FileModel).filter(FileModel.folder_id == folder_id, FileModel.user_id == user.id).all()
-    return [{"id": f.id, "filename": f.filename, "type": f.filetype, "uploaded_at": f.uploaded_at} for f in files]
+    if not user:
+        # DEMO kullanıcı
+        ip = request.client.host
+        demo_session = db.query(DemoSession).filter_by(ip_address=ip).first()
+        if not demo_session or demo_session.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=403, detail="Demo süresi dolmuş veya aktif demo yok.")
+        files = db.query(FileModel).filter(
+            FileModel.folder_id == folder_id,
+            FileModel.demo_session_id == demo_session.id
+        ).all()
+    else:
+        # Normal user
+        files = db.query(FileModel).filter(
+            FileModel.folder_id == folder_id,
+            FileModel.user_id == user.id
+        ).all()
+
+    return [
+        {"id": f.id, "filename": f.filename, "type": f.filetype, "uploaded_at": f.uploaded_at}
+        for f in files
+    ]
 
 @router.delete("/files/{file_id}")
 def delete_file(
@@ -128,29 +152,46 @@ def delete_file(
 
     return {"detail": "File and physical file deleted"}
 
-# app/routes/file.py
-
-import zipfile
-import tempfile
-from fastapi.responses import FileResponse
-
 @router.get("/files/{file_id}/preview")
-def preview_file(file_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    file = db.query(FileModel).filter(FileModel.id == file_id, FileModel.user_id == user.id).first()
+def preview_file(
+    file_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_optional),
+):
+    if not user:
+        # DEMO kullanıcısı ise:
+        ip = request.client.host
+        demo_session = db.query(DemoSession).filter_by(ip_address=ip).first()
+        if not demo_session or demo_session.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=403, detail="Demo süresi dolmuş veya aktif demo yok.")
+        file = db.query(FileModel).filter(
+            FileModel.id == file_id,
+            FileModel.demo_session_id == demo_session.id
+        ).first()
+    else:
+        # Normal user ise:
+        file = db.query(FileModel).filter(
+            FileModel.id == file_id,
+            FileModel.user_id == user.id
+        ).first()
+
     if not file:
         raise HTTPException(status_code=404, detail="Dosya bulunamadı!")
+
     # Eğer .zip dosyasıysa aç
     if file.filepath.endswith(".zip"):
+        import zipfile, tempfile, os
         with zipfile.ZipFile(file.filepath, "r") as zipf:
-            # Sadece ilk dosyayı çıkar (veya dosya adını database’e kaydet)
             namelist = zipf.namelist()
             if not namelist:
                 raise HTTPException(status_code=404, detail="Zip dosyası boş!")
-            # temp dosyaya çıkart
             tmp_dir = tempfile.mkdtemp()
             member = namelist[0]
             out_path = os.path.join(tmp_dir, member)
             zipf.extract(member, tmp_dir)
+            from fastapi.responses import FileResponse
             return FileResponse(out_path, filename=member)
     # Zipsiz ise direkt dosyayı göster
+    from fastapi.responses import FileResponse
     return FileResponse(file.filepath, filename=file.filename)
