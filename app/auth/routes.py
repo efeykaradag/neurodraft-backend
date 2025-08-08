@@ -3,7 +3,7 @@ from app.models import User, EmailCode, DemoSession
 from app.database import get_db
 from passlib.context import CryptContext
 from jose import jwt, JWTError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 import os, random, string
@@ -156,7 +156,7 @@ def me(request: Request, db: Session = Depends(get_db)):
     ip = request.headers.get("x-forwarded-for", request.client.host)
     session = db.query(DemoSession).filter(
         DemoSession.ip_address == ip,
-        DemoSession.expires_at > datetime.utcnow()
+        DemoSession.expires_at > datetime.utcnow(timezone.utc)
     ).first()
     if session:
         return {
