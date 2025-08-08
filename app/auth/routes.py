@@ -156,7 +156,7 @@ def me(request: Request, db: Session = Depends(get_db)):
     ip = request.headers.get("x-forwarded-for", request.client.host)
     session = db.query(DemoSession).filter(
         DemoSession.ip_address == ip,
-        DemoSession.expires_at > datetime.utcnow(timezone.utc)
+        DemoSession.expires_at > datetime.now(timezone.utc)
     ).first()
     if session:
         return {
