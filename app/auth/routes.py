@@ -159,6 +159,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 # ----------------- Kullanıcı (me) -----------------
 @router.get("/me")
 def me(request: Request, db: Session = Depends(get_db)):
+    # 1️⃣ Öncelikle access_token kontrolü
     token = request.cookies.get("access_token")
     if token:
         try:
@@ -173,21 +174,30 @@ def me(request: Request, db: Session = Depends(get_db)):
                         "role": user.role,
                         "name": user.full_name,
                     }
-        except Exception:
-            pass
+        except JWTError:
+            pass  # Token geçersizse demo kontrolüne geç
 
-    ip = request.headers.get("x-forwarded-for", request.client.host)
+    # 2️⃣ Demo kullanıcı kontrolü (IP tabanlı)
+    ip_header = request.headers.get("x-forwarded-for")
+    if ip_header:
+        # Virgülle ayrılmış IP listesinin ilkini al
+        ip = ip_header.split(",")[0].strip()
+    else:
+        ip = request.client.host
+
     session = db.query(DemoSession).filter(
         DemoSession.ip_address == ip,
         DemoSession.expires_at > datetime.now(timezone.utc)
     ).first()
+
     if session:
         return {
             "mode": "demo",
             "ip": ip,
-            "expires_at": session.expires_at,
+            "expires_at": session.expires_at.replace(tzinfo=timezone.utc)
         }
 
+    # 3️⃣ Ne token ne demo session varsa
     raise HTTPException(401, "Giriş yapmadınız veya demo süreniz bitti.")
 
 
@@ -279,7 +289,30 @@ def resend_verify_code(data: dict, db: Session = Depends(get_db)):
     db.commit()
 
     subject = "NeuroDrafts Kaydını Onayla 🚀"
-    html = f"""..."""  # HTML içeriği buraya
+    html = f"""<div style="max-width:440px;margin:auto;padding:24px;background:#fff;
+                border-radius:12px;font-family:sans-serif;color:#222;
+                border:1px solid #e4e8f0;box-shadow:0 4px 32px #0001;">
+        <div style="text-align:center;margin-bottom:18px;">
+            <img src="https://neurodrafts.com/logo.png" alt="NeuroDrafts" width="54" style="margin-bottom:12px;"/>
+            <h2 style="margin:0;font-size:1.5rem;color:#4b40c5;">Hoşgeldin!</h2>
+        </div>
+        <div style="font-size:1.12rem;margin-bottom:18px;">
+            NeuroDrafts hesabını oluşturmak üzeresin.<br>
+            Kaydını tamamlamak için aşağıdaki <b>onay kodunu</b> kullanabilirsin:
+        </div>
+        <div style="font-size:2rem;font-weight:700;background:#f5f8ff;border-radius:8px;padding:14px 0;text-align:center;letter-spacing:6px;color:#4b40c5;">
+            {code}
+        </div>
+        <div style="font-size:0.95rem;color:#555;margin:24px 0 8px;">
+            Kodun <b>10 dakika</b> boyunca geçerlidir. Kodun süresi dolarsa yeni bir kod alabilirsin.<br>
+            Eğer bu işlemi <b>sen başlatmadıysan</b> bu maili görmezden gel.
+        </div>
+        <hr style="margin:24px 0 8px;">
+        <div style="font-size:0.87rem;color:#777;text-align:center;">
+            NeuroDrafts ekibi <br>
+            <a href="https://neurodrafts.com" style="color:#06B6D4;text-decoration:none;">neurodrafts.com</a>
+        </div>
+    </div>"""
     send_email(email, subject, html)
 
     return {"msg": "Yeni doğrulama kodu e-posta adresine gönderildi."}
